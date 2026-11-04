@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+build/*.ico
+dist/
+*.spec
+ver_*.txt
+icono_*.ico

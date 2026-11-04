@@ -1,0 +1,11 @@
+{
+  "activo": true,
+  "mensaje": "El Creador de USB de Overty está desactivado temporalmente. Contacta a Gabriel HernArro.",
+  "firma": "Gabriel HernArro",
+  "iso": {
+    "nombre": "Overty Disk (USB fix)",
+    "url": "",
+    "sha256": ""
+  },
+  "actualizado": ""
+}

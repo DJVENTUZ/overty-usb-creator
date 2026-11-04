@@ -1,0 +1,25 @@
+CREADOR DE USB DE OVERTY  ·  Mainbit
+Herramienta de Gabriel HernArro
+=====================================
+
+QUÉ HACE
+  Deja una memoria USB lista para arrancar Overty Disk en cualquier PC (modo UEFI),
+  en un clic. Descarga sola el ISO correcto y verifica que la USB quede bien.
+
+CÓMO SE USA
+  1. Conecta una memoria USB de 8 GB o más.  (SE BORRA TODO lo que tenga)
+  2. Doble clic en  CREAR_USB_OVERTY.bat  y acepta el permiso de administrador.
+  3. Elige la memoria en la lista y pulsa "Crear USB".
+  4. Espera a que diga LISTO. Ya puedes sacarla.
+  5. Arranca la PC desde la USB (tecla F12 en Lenovo) en modo UEFI.
+
+NECESITA INTERNET
+  La primera descarga del ISO necesita conexión. Después queda guardado en el equipo.
+
+PROBLEMAS
+  - "Sin conexión": revisa el internet y pulsa Reintentar.
+  - "Acceso desactivado": contacta a Gabriel HernArro.
+  - Si una PC no arranca desde la USB, entra al menú de arranque (F12) y elige
+    la USB en la sección UEFI.
+
+(c) 2026 Gabriel HernArro
