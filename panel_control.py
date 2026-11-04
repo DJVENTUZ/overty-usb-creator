@@ -247,11 +247,8 @@ class App:
                  bg=CARD, fg=INK2, font=("Segoe UI", 9), justify="left").pack(anchor="w", padx=16)
         self._label(c, "PIN" if existe else "PIN nuevo (invéntalo)")
         self.e_pin = self._entry(c, show="•")
-        if not existe:
-            self._label(c, "Token de GitHub (ghp_…)")
-            self.e_tok = self._entry(c, show="•")
-        else:
-            self.e_tok = None
+        self._label(c, "Token de GitHub (deja vacío para usar el guardado)" if existe else "Token de GitHub (ghp_…)")
+        self.e_tok = self._entry(c, show="•")
         self._poner_msg(c)
         self._boton(c, "Guardar y entrar" if not existe else "Entrar", self._entrar).pack(anchor="e", padx=16, pady=(0, 12))
         if not self.autotest:
@@ -267,20 +264,31 @@ class App:
 
     def _entrar_bg(self, pin, tok):
         try:
-            if tok.strip():
-                guardar_token(pin, tok.strip())
-                self.token = tok.strip()
-            else:
-                self.token = leer_token(pin)
-            if not self.token:
-                return self.root.after(0, lambda: self._set_msg("PIN incorrecto o sin token guardado."))
-            ctrl, sha = leer_actual(self.token)
+            tok = (tok or "").strip()
+            token = tok if tok else leer_token(pin)
+            if not token:
+                return self.root.after(0, lambda: self._set_msg("Escribe tu token (o el PIN no coincide con el guardado)."))
+            # validar el token ANTES de guardarlo (así un typo no te deja trabado)
+            ctrl, sha = leer_actual(token)
+            if tok:
+                guardar_token(pin, tok)          # solo se guarda si funcionó
+            self.token = token
             if ctrl is None:
                 ctrl = {"activo": True, "mensaje": "", "iso": {"nombre": "", "url": "", "sha256": ""}}
             self.control, self.sha = ctrl, sha
             self.root.after(0, self._panel)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                m = "Token inválido, vencido o sin permiso 'repo'. Revísalo y vuelve a pegarlo."
+            elif e.code == 404:
+                m = f"No encuentro el repositorio {CFG.GH_OWNER}/{CFG.GH_REPO}. Revisa que exista y que el token tenga acceso."
+            else:
+                m = f"GitHub respondió error {e.code}."
+            self.root.after(0, lambda: self._set_msg(m))
+        except urllib.error.URLError:
+            self.root.after(0, lambda: self._set_msg("Sin internet o GitHub no responde. Revisa tu conexión."))
         except Exception as e:
-            self.root.after(0, lambda: self._set_msg("Error: " + str(e)[:140]))
+            self.root.after(0, lambda: self._set_msg("Error: " + (str(e)[:140] or "desconocido")))
 
     # ---- panel principal
     def _panel(self):
