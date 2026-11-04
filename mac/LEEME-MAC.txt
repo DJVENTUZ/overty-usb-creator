@@ -1,0 +1,31 @@
+OVERTY PARA MAC (Liquid Glass) · por Gabriel HernArro
+=====================================================
+
+Estas son las versiones para macOS, con la interfaz de cristal y animaciones.
+
+CÓMO OBTENER LAS APPS (una sola vez)
+  1. Descomprime esta carpeta donde quieras (por ejemplo en el Escritorio).
+  2. Doble clic en  CONSTRUIR_EN_MAC.command
+     - Si macOS lo bloquea ("no se puede abrir"), haz clic derecho sobre el
+       archivo → Abrir → Abrir.
+     - Si pide las Herramientas de línea de comandos, ejecuta en Terminal:
+         xcode-select --install
+       y vuelve a dar doble clic.
+  3. Espera a que diga LISTO. Tus apps quedan en el Escritorio, carpeta
+     "Overty-Mac":
+        • Panel Overty.app          (para ti)
+        • Creador USB Overty.app    (crear la USB desde el Mac)
+
+NOTAS
+  • La primera vez que abras cada .app, si macOS avisa que es de un
+    desarrollador no identificado: clic derecho → Abrir → Abrir.
+  • El Creador en Mac graba la USB con "dd" (imagen cruda), que es el modo
+    que siempre arranca. Te pedirá tu contraseña de macOS para escribir en
+    el disco. Prueba la primera vez con una USB de repuesto.
+  • El Panel funciona igual que en Windows: PIN + token la primera vez,
+    después solo PIN. Sube el ISO desde "Subir ISO nuevo…".
+
+Esto se resuelve con firma de desarrollador de Apple más adelante, igual que
+en Windows con el certificado de firma de código.
+
+© 2026 Gabriel HernArro
