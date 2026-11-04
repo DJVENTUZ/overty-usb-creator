@@ -171,10 +171,21 @@ class App:
             self._logo = None
 
         self._encabezado()
-        self.cuerpo = tk.Frame(root, bg=NAVY)
-        self.cuerpo.pack(fill="both", expand=True, padx=22, pady=(0, 10))
         tk.Label(root, text=f"© 2026 {CFG.FIRMA} · Panel v{CFG.VERSION} · {CFG.GH_OWNER}/{CFG.GH_REPO}",
                  bg=NAVY, fg=INK2, font=("Segoe UI", 8)).pack(side="bottom", pady=6)
+        # cuerpo con barra de desplazamiento (así siempre se alcanza el campo del enlace, aunque la ventana sea chica)
+        outer = tk.Frame(root, bg=NAVY)
+        outer.pack(fill="both", expand=True, padx=(22, 6), pady=(0, 6))
+        canvas = tk.Canvas(outer, bg=NAVY, highlightthickness=0)
+        vs = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vs.set)
+        vs.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self.cuerpo = tk.Frame(canvas, bg=NAVY)
+        win = canvas.create_window((0, 0), window=self.cuerpo, anchor="nw")
+        self.cuerpo.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
 
         if autotest:
             self._login()
