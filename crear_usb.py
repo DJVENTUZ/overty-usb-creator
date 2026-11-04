@@ -1,37 +1,31 @@
 # -*- coding: utf-8 -*-
 """
 Creador de USB de Overty Disk  ·  por Gabriel HernArro
-Interfaz gráfica (una sola pantalla). Baja el ISO que Gabriel marque en el control
-remoto y deja la USB lista para arrancar en UEFI. Si el control está desactivado,
-la app no funciona.
-
-Firma de Gabriel HernArro visible en: ventana, pantalla principal, "Acerca de",
-archivo CREADA-POR.txt en cada USB y propiedades del .exe.
+Interfaz nativa (Tkinter): funciona en cualquier Windows, físico o en máquina
+virtual, sin depender de aceleración gráfica. Baja el ISO que Gabriel marque en
+el control remoto y deja la USB lista para arrancar en UEFI.
 """
-import os, sys, json, time, threading, subprocess, tempfile, hashlib, ctypes
+import os, sys, json, time, threading, subprocess, tempfile, hashlib
 import urllib.request
+import tkinter as tk
+from tkinter import ttk
 
 import mb_config as CFG
 
 IS_WIN = os.name == "nt"
-NOWIN = 0x08000000 if IS_WIN else 0          # CREATE_NO_WINDOW
+NOWIN = 0x08000000 if IS_WIN else 0
+
+# Paleta Mainbit
+BG = "#eef3f9"; CARD = "#ffffff"; NAVY = "#1b3b5a"; BLUE = "#3a7fc0"; BLUE2 = "#4a90d2"
+INK = "#16304a"; INK2 = "#6b84a0"; LINE = "#dbe6f1"; OK = "#2ea86a"; WARN = "#d9902a"; RED = "#cf4b42"
 
 
-# ------------------------------------------------------------------ utilidades
-def dir_base():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+def recurso(rel):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
 
 
-def dir_web():
-    for d in (os.path.join(dir_base(), "web"),
-              os.path.join(getattr(sys, "_MEIPASS", dir_base()), "web")):
-        if os.path.isdir(d):
-            return d
-    return os.path.join(dir_base(), "web")
-
-
+# ------------------------------------------------------------------ backend (sin cambios de fondo)
 def cache_iso():
     base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
     d = os.path.join(base, "OvertyCreator", "iso")
@@ -40,7 +34,6 @@ def cache_iso():
 
 
 def ps(cmd, timeout=120):
-    """PowerShell silencioso; devuelve (codigo, salida, error)."""
     if not IS_WIN:
         return -2, "", "Solo Windows"
     try:
@@ -66,16 +59,13 @@ def ps_json(cmd, timeout=60):
         return None
 
 
-# ------------------------------------------------------------------ control remoto (kill-switch)
 def leer_control():
-    """Lee control.json de GitHub. Devuelve dict o lanza excepción si no hay internet."""
     req = urllib.request.Request(CFG.CONTROL_URL + "?t=" + str(int(time.time())),
                                  headers={"User-Agent": "OvertyCreator/" + CFG.VERSION, "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-# ------------------------------------------------------------------ discos USB
 def usbs():
     cmd = ("Get-Disk | Where-Object { $_.BusType -eq 'USB' -and -not $_.IsBoot -and -not $_.IsSystem } | "
            "ForEach-Object { [pscustomobject]@{ n=$_.Number; nombre=$_.FriendlyName; gb=[math]::Round($_.Size/1GB,1) } } | "
@@ -83,10 +73,24 @@ def usbs():
     return ps_json(cmd) or []
 
 
-# ------------------------------------------------------------------ descarga del ISO
+def _sha256(ruta, progreso=None):
+    h = hashlib.sha256()
+    tam = os.path.getsize(ruta) or 1
+    hecho = 0
+    with open(ruta, "rb") as f:
+        while True:
+            b = f.read(1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+            hecho += len(b)
+            if progreso:
+                progreso(hecho / tam * 100.0, "Verificando el ISO…")
+    return h.hexdigest()
+
+
 def descargar_iso(url, sha, log, progreso):
     destino = os.path.join(cache_iso(), "overty.iso")
-    # ¿ya lo tenemos con el sha correcto?
     if sha and os.path.isfile(destino) and _sha256(destino, progreso) == sha.lower():
         log("ISO ya descargado y verificado.")
         return destino
@@ -109,115 +113,8 @@ def descargar_iso(url, sha, log, progreso):
         log("Verificando la descarga…")
         if _sha256(destino, progreso) != sha.lower():
             os.remove(destino)
-            raise RuntimeError("El ISO descargado no coincide con la huella de seguridad. Reintenta.")
+            raise RuntimeError("El ISO descargado no coincide con su huella de seguridad. Reintenta.")
     return destino
-
-
-def _sha256(ruta, progreso=None):
-    h = hashlib.sha256()
-    tam = os.path.getsize(ruta)
-    hecho = 0
-    with open(ruta, "rb") as f:
-        while True:
-            b = f.read(1024 * 1024)
-            if not b:
-                break
-            h.update(b)
-            hecho += len(b)
-            if progreso and tam:
-                progreso(hecho / tam * 100.0, "Verificando el ISO…")
-    return h.hexdigest()
-
-
-# ------------------------------------------------------------------ crear la USB
-def crear_usb(disco_n, iso, log, progreso):
-    # 1. formatear FAT32 (lo que arranca en UEFI en cualquier PC)
-    log("Preparando la USB…")
-    progreso(-1, "Preparando la USB…")
-    crear = "create partition primary size=32000" if _tam_disco(disco_n) > 32 * 1024**3 else "create partition primary"
-    script = "\r\n".join([f"select disk {disco_n}", "clean", "convert mbr", crear,
-                          "format fs=fat32 quick label=OVERTY", "active", "assign"])
-    dp = os.path.join(tempfile.gettempdir(), "overty_dp.txt")
-    open(dp, "w", encoding="ascii").write(script)
-    rc, out, err = ps(f"diskpart /s '{dp}'", timeout=300)
-    try:
-        os.remove(dp)
-    except OSError:
-        pass
-    if rc != 0:
-        raise RuntimeError("No se pudo preparar la USB (diskpart).")
-    dst = _letra_disco(disco_n)
-    if not dst:
-        raise RuntimeError("La USB se formateó pero Windows no le dio letra. Reconéctala y reintenta.")
-    log(f"USB lista como {dst}:")
-
-    # 2. montar el ISO
-    log("Abriendo el ISO…")
-    rc, out, _ = ps(f"(Mount-DiskImage -ImagePath '{iso}' -PassThru | Get-Volume).DriveLetter", timeout=120)
-    src = (out or "").strip()[:1]
-    for _ in range(15):
-        if src:
-            break
-        time.sleep(1)
-        rc, out, _ = ps(f"(Get-DiskImage -ImagePath '{iso}' | Get-Volume).DriveLetter")
-        src = (out or "").strip()[:1]
-    if not src:
-        raise RuntimeError("Windows no pudo abrir el ISO.")
-
-    try:
-        # 3. copiar con porcentaje real
-        archivos, total = [], 0
-        for raiz, _, fs in os.walk(src + ":\\"):
-            for nombre in fs:
-                p = os.path.join(raiz, nombre)
-                try:
-                    total += os.path.getsize(p)
-                    archivos.append(p)
-                except OSError:
-                    pass
-        grandes = [a for a in archivos if _seguro_tam(a) >= 4 * 1024**3]
-        if grandes:
-            raise RuntimeError("El ISO trae un archivo de más de 4 GB; no cabe en FAT32. Avísale a Gabriel.")
-        log(f"Copiando Overty ({len(archivos)} archivos, {total//(1024*1024)} MB)…")
-        copiado = 0
-        pref = src + ":\\"
-        for a in archivos:
-            rel = a[len(pref):]
-            d = os.path.join(dst + ":\\", rel)
-            os.makedirs(os.path.dirname(d), exist_ok=True)
-            with open(a, "rb") as fi, open(d, "wb") as fo:
-                while True:
-                    b = fi.read(1024 * 1024)
-                    if not b:
-                        break
-                    fo.write(b)
-                    copiado += len(b)
-                    if total:
-                        progreso(copiado / total * 100.0, f"Copiando  {copiado//(1024*1024)} / {total//(1024*1024)} MB")
-
-        # 4. verificar
-        log("Verificando…")
-        progreso(-1, "Verificando…")
-        n_dst = sum(len(fs) for _, _, fs in os.walk(dst + ":\\"))
-        if n_dst < len(archivos):
-            raise RuntimeError(f"La USB no quedó completa ({n_dst}/{len(archivos)} archivos). Usa otra USB.")
-        if not os.path.isfile(os.path.join(dst + ":\\", "EFI", "BOOT", "BOOTX64.EFI")):
-            log("Aviso: no encontré EFI\\BOOT\\BOOTX64.EFI; podría no arrancar en UEFI.")
-        firma = (f"USB creada con la herramienta de {CFG.FIRMA}\r\n"
-                 f"ISO: {os.path.basename(iso)}\r\n"
-                 f"Fecha: {time.strftime('%Y-%m-%d %H:%M')}\r\nEquipo: {os.environ.get('COMPUTERNAME','')}\r\n")
-        open(os.path.join(dst + ":\\", "CREADA-POR.txt"), "w", encoding="utf-8").write(firma)
-        ps(f"Write-VolumeCache -DriveLetter {dst}")
-    finally:
-        ps(f"Dismount-DiskImage -ImagePath '{iso}'")
-    return dst
-
-
-def _seguro_tam(p):
-    try:
-        return os.path.getsize(p)
-    except OSError:
-        return 0
 
 
 def _tam_disco(n):
@@ -241,98 +138,352 @@ def _letra_disco(n):
     return (out or "").strip()[:1] or None
 
 
-# ------------------------------------------------------------------ API para la interfaz
-class API:
-    def __init__(self):
-        self.estado = {"fase": "cargando", "control": None, "firma": CFG.FIRMA, "version": CFG.VERSION,
-                       "usbs": [], "pct": 0, "etapa": "", "log": [], "ocupado": False, "hecho": False}
-        self.ventana = None
+def _seguro_tam(p):
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
 
-    # ---- puente
-    def snapshot(self):
-        return self.estado
 
-    def _log(self, t):
-        self.estado["log"] = (self.estado["log"] + [t])[-60:]
+def crear_usb(disco_n, iso, log, progreso):
+    log("Preparando la USB…")
+    progreso(-1, "Preparando la USB…")
+    crear = "create partition primary size=32000" if _tam_disco(disco_n) > 32 * 1024**3 else "create partition primary"
+    script = "\r\n".join([f"select disk {disco_n}", "clean", "convert mbr", crear,
+                          "format fs=fat32 quick label=OVERTY", "active", "assign"])
+    dp = os.path.join(tempfile.gettempdir(), "overty_dp.txt")
+    open(dp, "w", encoding="ascii").write(script)
+    rc, out, err = ps(f"diskpart /s '{dp}'", timeout=300)
+    try:
+        os.remove(dp)
+    except OSError:
+        pass
+    if rc != 0:
+        raise RuntimeError("No se pudo preparar la USB (diskpart).")
+    dst = _letra_disco(disco_n)
+    if not dst:
+        raise RuntimeError("La USB se formateó pero Windows no le dio letra. Reconéctala y reintenta.")
+    log(f"USB lista como {dst}:")
 
-    def _prog(self, pct, etapa):
-        self.estado["pct"] = round(pct, 1) if pct >= 0 else -1
-        self.estado["etapa"] = etapa
+    log("Abriendo el ISO…")
+    rc, out, _ = ps(f"(Mount-DiskImage -ImagePath '{iso}' -PassThru | Get-Volume).DriveLetter", timeout=120)
+    src = (out or "").strip()[:1]
+    for _ in range(15):
+        if src:
+            break
+        time.sleep(1)
+        rc, out, _ = ps(f"(Get-DiskImage -ImagePath '{iso}' | Get-Volume).DriveLetter")
+        src = (out or "").strip()[:1]
+    if not src:
+        raise RuntimeError("Windows no pudo abrir el ISO.")
 
-    def arrancar(self):
-        threading.Thread(target=self._comprobar_control, daemon=True).start()
+    try:
+        archivos, total = [], 0
+        for raiz, _, fs in os.walk(src + ":\\"):
+            for nombre in fs:
+                p = os.path.join(raiz, nombre)
+                total += _seguro_tam(p)
+                archivos.append(p)
+        if [a for a in archivos if _seguro_tam(a) >= 4 * 1024**3]:
+            raise RuntimeError("El ISO trae un archivo de más de 4 GB; no cabe en FAT32. Avísale a Gabriel.")
+        log(f"Copiando Overty ({len(archivos)} archivos, {total//(1024*1024)} MB)…")
+        copiado = 0
+        pref = src + ":\\"
+        for a in archivos:
+            d = os.path.join(dst + ":\\", a[len(pref):])
+            os.makedirs(os.path.dirname(d), exist_ok=True)
+            with open(a, "rb") as fi, open(d, "wb") as fo:
+                while True:
+                    b = fi.read(1024 * 1024)
+                    if not b:
+                        break
+                    fo.write(b)
+                    copiado += len(b)
+                    if total:
+                        progreso(copiado / total * 100.0, f"Copiando  {copiado//(1024*1024)} / {total//(1024*1024)} MB")
+        log("Verificando…")
+        progreso(-1, "Verificando…")
+        n_dst = sum(len(fs) for _, _, fs in os.walk(dst + ":\\"))
+        if n_dst < len(archivos):
+            raise RuntimeError(f"La USB no quedó completa ({n_dst}/{len(archivos)} archivos). Usa otra USB.")
+        if not os.path.isfile(os.path.join(dst + ":\\", "EFI", "BOOT", "BOOTX64.EFI")):
+            log("Aviso: no encontré EFI\\BOOT\\BOOTX64.EFI; podría no arrancar en UEFI.")
+        firma = (f"USB creada con la herramienta de {CFG.FIRMA}\r\nISO: {os.path.basename(iso)}\r\n"
+                 f"Fecha: {time.strftime('%Y-%m-%d %H:%M')}\r\nEquipo: {os.environ.get('COMPUTERNAME','')}\r\n")
+        open(os.path.join(dst + ":\\", "CREADA-POR.txt"), "w", encoding="utf-8").write(firma)
+        ps(f"Write-VolumeCache -DriveLetter {dst}")
+    finally:
+        ps(f"Dismount-DiskImage -ImagePath '{iso}'")
+    return dst
 
-    def _comprobar_control(self):
+
+# ------------------------------------------------------------------ interfaz Tkinter
+class App:
+    def __init__(self, root, autotest=False):
+        self.root = root
+        self.autotest = autotest
+        self.fase = "cargando"
+        self.control = None
+        self.sel = tk.IntVar(value=-1)
+        self.lista_usb = []
+        self.ocupado = False
+
+        root.title(f"{CFG.PRODUCTO}  ·  por {CFG.FIRMA}")
+        root.configure(bg=BG)
+        root.geometry("900x650")
+        root.minsize(820, 600)
+        try:
+            self._logo = tk.PhotoImage(file=recurso(os.path.join("assets", "logo_h.png")))
+            root.iconphoto(True, self._logo)
+        except Exception:
+            self._logo = None
+
+        self._encabezado()
+        self.cuerpo = tk.Frame(root, bg=BG)
+        self.cuerpo.pack(fill="both", expand=True, padx=22, pady=(0, 10))
+        self._pie()
+
+        if autotest:
+            self.control = {"activo": True, "iso": {"nombre": "Overty Disk (USB fix)", "url": "x"}}
+            self.lista_usb = [{"n": 1, "nombre": "SanDisk Cruzer Glide", "gb": 14.4},
+                              {"n": 2, "nombre": "Kingston DataTraveler", "gb": 28.8}]
+            self.fase = "listo"
+            self._render()
+            root.after(1500, self._captura)
+        else:
+            threading.Thread(target=self._comprobar, daemon=True).start()
+
+    # ---- estructura fija
+    def _encabezado(self):
+        top = tk.Frame(self.root, bg=BG)
+        top.pack(fill="x", padx=22, pady=(16, 12))
+        chip = tk.Frame(top, bg="#ffffff", padx=10, pady=6)
+        chip.pack(side="left")
+        if self._logo:
+            tk.Label(chip, image=self._logo, bg="#ffffff").pack()
+        else:
+            tk.Label(chip, text="Mainbit", bg="#ffffff", fg=NAVY, font=("Segoe UI", 15, "bold")).pack()
+        tit = tk.Frame(top, bg=BG)
+        tit.pack(side="left", padx=14)
+        tk.Label(tit, text="Creador de USB · Overty", bg=BG, fg=INK, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(tit, text="Deja la memoria lista para arrancar, en un clic", bg=BG, fg=INK2,
+                 font=("Segoe UI", 9)).pack(anchor="w")
+        tk.Label(top, text=f"Herramienta de {CFG.FIRMA}", bg=BG, fg=INK2, font=("Segoe UI", 9)).pack(side="right")
+
+    def _pie(self):
+        tk.Label(self.root, text=f"© 2026 {CFG.FIRMA} · v{CFG.VERSION}", bg=BG, fg=INK2,
+                 font=("Segoe UI", 8)).pack(side="bottom", pady=6)
+
+    def _boton(self, parent, texto, cmd, tipo="pri", **kw):
+        colores = {"pri": (BLUE, "#ffffff"), "ok": (OK, "#ffffff"), "soft": ("#e7eef7", INK)}
+        bg, fg = colores.get(tipo, colores["pri"])
+        b = tk.Button(parent, text=texto, command=cmd, bg=bg, fg=fg, activebackground=bg, activeforeground=fg,
+                      relief="flat", bd=0, font=("Segoe UI", 10, "bold"), cursor="hand2", padx=18, pady=9, **kw)
+        return b
+
+    def _card(self):
+        c = tk.Frame(self.cuerpo, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+        c.pack(fill="both", expand=True)
+        return c
+
+    # ---- marshalling a la UI
+    def ui(self, fn, *a):
+        try:
+            self.root.after(0, lambda: fn(*a))
+        except Exception:
+            pass
+
+    # ---- lógica
+    def _comprobar(self):
         try:
             c = leer_control()
-            self.estado["control"] = c
+            self.control = c
             if not c.get("activo", False):
-                self.estado["fase"] = "bloqueado"
+                self.fase = "bloqueado"
             else:
-                self.estado["fase"] = "listo"
-                self.refrescar_usb()
+                self.fase = "listo"
+                self.lista_usb = usbs()
         except Exception:
-            self.estado["fase"] = "sin_internet"
-
-    def reintentar(self):
-        self.estado["fase"] = "cargando"
-        self.arrancar()
-        return True
+            self.fase = "sin_internet"
+        self.ui(self._render)
 
     def refrescar_usb(self):
-        if not self.estado["ocupado"]:
-            self.estado["usbs"] = usbs()
-        return self.estado["usbs"]
+        if not self.ocupado:
+            self.lista_usb = usbs()
+            self._render()
 
-    def crear(self, disco_n):
-        if self.estado["ocupado"]:
-            return False
-        c = self.estado.get("control") or {}
-        if not c.get("activo"):
-            return False
-        iso_info = c.get("iso") or {}
-        if not iso_info.get("url"):
-            self._log("Gabriel aún no marcó ningún ISO en el control.")
-            return False
-        self.estado["ocupado"] = True
-        self.estado["hecho"] = False
-        self.estado["log"] = []
+    def reintentar(self):
+        self.fase = "cargando"
+        self._render()
+        threading.Thread(target=self._comprobar, daemon=True).start()
 
-        def tarea():
-            try:
-                iso = descargar_iso(iso_info["url"], iso_info.get("sha256", ""), self._log, self._prog)
-                dst = crear_usb(int(disco_n), iso, self._log, self._prog)
-                self._prog(100, "Listo")
-                self._log(f"LISTO: la USB en {dst}: está lista. Ya puedes sacarla.")
-                self.estado["hecho"] = True
-            except Exception as e:
-                self._log("ERROR: " + str(e))
-                self.estado["etapa"] = "Error"
-            finally:
-                self.estado["ocupado"] = False
-                self.refrescar_usb()
+    # ---- pantallas
+    def _limpiar(self):
+        for w in self.cuerpo.winfo_children():
+            w.destroy()
 
-        threading.Thread(target=tarea, daemon=True).start()
-        return True
+    def _render(self):
+        self._limpiar()
+        if self.fase == "cargando":
+            return self._centro("Comprobando…", "Verificando la licencia y el ISO.", INK2)
+        if self.fase == "sin_internet":
+            c = self._centro("Sin conexión", "Esta herramienta necesita internet para verificar la licencia\ny descargar el ISO.", WARN)
+            self._boton(c, "Reintentar", self.reintentar).pack(pady=8)
+            return
+        if self.fase == "bloqueado":
+            m = (self.control or {}).get("mensaje") or "Herramienta desactivada."
+            return self._centro("Acceso desactivado", m, RED)
+        return self._listo()
 
+    def _centro(self, titulo, sub, color):
+        c = self._card()
+        box = tk.Frame(c, bg=CARD)
+        box.place(relx=0.5, rely=0.45, anchor="center")
+        tk.Label(box, text=titulo, bg=CARD, fg=color, font=("Segoe UI", 16, "bold")).pack()
+        tk.Label(box, text=sub, bg=CARD, fg=INK2, font=("Segoe UI", 10), justify="center").pack(pady=6)
+        return box
 
-def _datos_webview():
-    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
-    d = os.path.join(base, "OvertyCreator", "webview")
-    os.makedirs(d, exist_ok=True)
-    return d
+    def _listo(self):
+        c = self._card()
+        pad = tk.Frame(c, bg=CARD)
+        pad.pack(fill="both", expand=True, padx=22, pady=18)
+        iso = (self.control or {}).get("iso") or {}
+        # chip de estado del ISO
+        chip = tk.Frame(pad, bg="#eef6ef", highlightbackground="#cfe6d4", highlightthickness=1)
+        chip.pack(fill="x", pady=(0, 14))
+        txt = ("✓   Overty listo para grabar · se descarga automáticamente" if iso.get("url")
+               else f"!   Aún no hay un Overty disponible. Contacta a {CFG.FIRMA}.")
+        tk.Label(chip, text=txt, bg="#eef6ef", fg=(INK if iso.get("url") else "#8a6a2e"),
+                 font=("Segoe UI", 10), anchor="w", padx=12, pady=10).pack(fill="x")
+
+        tk.Label(pad, text="ELIGE LA MEMORIA USB", bg=CARD, fg=INK2, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        cont = tk.Frame(pad, bg=CARD)
+        cont.pack(fill="both", expand=True, pady=8)
+        if self.lista_usb:
+            for u in self.lista_usb:
+                fila = tk.Frame(cont, bg="#f7fbff", highlightbackground=LINE, highlightthickness=1)
+                fila.pack(fill="x", pady=4)
+                rb = tk.Radiobutton(fila, variable=self.sel, value=u["n"], bg="#f7fbff", activebackground="#f7fbff",
+                                    command=self._render, takefocus=0)
+                rb.pack(side="left", padx=(8, 0))
+                info = tk.Frame(fila, bg="#f7fbff")
+                info.pack(side="left", fill="x", expand=True, pady=8)
+                tk.Label(info, text=u["nombre"], bg="#f7fbff", fg=INK, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+                tk.Label(info, text=f"Disco {u['n']} · se borrará todo su contenido", bg="#f7fbff", fg=INK2,
+                         font=("Segoe UI", 9)).pack(anchor="w")
+                tk.Label(fila, text=f"{u['gb']} GB", bg="#f7fbff", fg=NAVY,
+                         font=("Segoe UI", 12, "bold")).pack(side="right", padx=14)
+        else:
+            tk.Label(cont, text="Conecta una memoria USB (8 GB o más) y aparecerá aquí.",
+                     bg=CARD, fg=INK2, font=("Segoe UI", 10)).pack(pady=24)
+
+        barra = tk.Frame(pad, bg=CARD)
+        barra.pack(fill="x", pady=(6, 0))
+        tk.Label(barra, text="⚠ La USB que elijas se borra por completo.", bg=CARD, fg=INK2,
+                 font=("Segoe UI", 9)).pack(side="left")
+        puede = bool(iso.get("url")) and self.lista_usb
+        self._boton(barra, "Crear USB", self._crear, "pri",
+                    state=("normal" if puede else "disabled")).pack(side="right")
+        self._boton(barra, "Actualizar", self.refrescar_usb, "soft").pack(side="right", padx=8)
+
+    def _crear(self):
+        if self.ocupado or self.sel.get() < 0:
+            return
+        disco = self.sel.get()
+        self.ocupado = True
+        self._pantalla_progreso()
+        threading.Thread(target=self._tarea, args=(disco,), daemon=True).start()
+
+    def _pantalla_progreso(self):
+        self._limpiar()
+        c = self._card()
+        pad = tk.Frame(c, bg=CARD)
+        pad.pack(fill="both", expand=True, padx=22, pady=18)
+        self.lbl_pct = tk.Label(pad, text="0%", bg=CARD, fg=NAVY, font=("Segoe UI", 30, "bold"))
+        self.lbl_pct.pack(anchor="w")
+        self.lbl_etapa = tk.Label(pad, text="Preparando…", bg=CARD, fg=INK2, font=("Segoe UI", 10))
+        self.lbl_etapa.pack(anchor="w")
+        self.pbar = ttk.Progressbar(pad, maximum=100, length=100)
+        self.pbar.pack(fill="x", pady=10)
+        self.txt = tk.Text(pad, height=12, bg="#f6f9fc", fg=INK2, relief="flat", font=("Consolas", 9),
+                           highlightbackground=LINE, highlightthickness=1, padx=10, pady=8, wrap="word")
+        self.txt.pack(fill="both", expand=True)
+        self.txt.configure(state="disabled")
+        self.fin_frame = tk.Frame(pad, bg=CARD)
+        self.fin_frame.pack(fill="x", pady=(10, 0))
+
+    def _log(self, t):
+        def _():
+            self.txt.configure(state="normal")
+            self.txt.insert("end", t + "\n")
+            self.txt.see("end")
+            self.txt.configure(state="disabled")
+        self.ui(_)
+
+    def _prog(self, pct, etapa):
+        def _():
+            if pct < 0:
+                self.pbar.configure(mode="indeterminate")
+                self.pbar.start(12)
+                self.lbl_pct.configure(text="···")
+            else:
+                self.pbar.stop()
+                self.pbar.configure(mode="determinate", value=pct)
+                self.lbl_pct.configure(text=f"{int(pct)}%")
+            self.lbl_etapa.configure(text=etapa)
+        self.ui(_)
+
+    def _tarea(self, disco):
+        try:
+            iso_info = (self.control or {}).get("iso") or {}
+            iso = descargar_iso(iso_info["url"], iso_info.get("sha256", ""), self._log, self._prog)
+            dst = crear_usb(int(disco), iso, self._log, self._prog)
+            self._prog(100, "Listo")
+            self._log(f"LISTO: la USB en {dst}: está lista. Ya puedes sacarla.")
+            self.ui(self._exito)
+        except Exception as e:
+            self._log("ERROR: " + str(e))
+            self.ui(lambda: self.lbl_etapa.configure(text="Error", fg=RED))
+            self.ui(self._reintentar_btn)
+        finally:
+            self.ocupado = False
+
+    def _exito(self):
+        tk.Label(self.fin_frame, text="✔ Lista. Arranca la PC desde la USB (F12, modo UEFI).",
+                 bg=CARD, fg=OK, font=("Segoe UI", 10, "bold")).pack(side="left")
+        self._boton(self.fin_frame, "Crear otra", self._otra, "pri").pack(side="right")
+
+    def _reintentar_btn(self):
+        self._boton(self.fin_frame, "Volver", self._otra, "soft").pack(side="right")
+
+    def _otra(self):
+        self.sel.set(-1)
+        self.refrescar_usb()
+        self.fase = "listo"
+        self._render()
+
+    def _captura(self):
+        try:
+            from PIL import ImageGrab
+            self.root.update_idletasks()
+            x, y = self.root.winfo_rootx(), self.root.winfo_rooty()
+            w, h = self.root.winfo_width(), self.root.winfo_height()
+            ImageGrab.grab(bbox=(x, y, x + w, y + h)).save(os.environ.get("MB_SHOT", "shot_creador.png"))
+        except Exception as e:
+            print("captura falló:", e)
+        self.root.destroy()
 
 
 def main():
-    import webview
-    api = API()
-    w = webview.create_window(f"{CFG.PRODUCTO}  ·  por {CFG.FIRMA}",
-                              url=os.path.join(dir_web(), "crear.html"),
-                              js_api=api, width=940, height=680, min_size=(820, 600),
-                              background_color="#eef3f9")
-    api.ventana = w
-    # storage_path = carpeta propia y con permiso de escritura para WebView2 (evita que se quede "no responde")
-    webview.start(api.arrancar, gui="edgechromium", private_mode=False, storage_path=_datos_webview())
+    autotest = "--autotest" in sys.argv
+    root = tk.Tk()
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+    App(root, autotest=autotest)
+    root.mainloop()
 
 
 if __name__ == "__main__":

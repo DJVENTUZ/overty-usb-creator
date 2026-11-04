@@ -2,7 +2,7 @@ name: Compilar Creador y Panel (Overty)
 on:
   push:
     branches: [main]
-    paths: ["**.py", "web/**", "build/**", ".github/workflows/build.yml"]
+    paths: ["**.py", "assets/**", "build/**", ".github/workflows/build.yml"]
   workflow_dispatch:
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
 
       - name: Instalar dependencias
         shell: pwsh
-        run: python -m pip install --upgrade pyinstaller pywebview cryptography pillow
+        run: python -m pip install --upgrade pyinstaller cryptography pillow
 
       - name: Iconos y versión (firma Gabriel HernArro)
         shell: pwsh
@@ -27,32 +27,36 @@ jobs:
           python build/hacer_version.py creador
           python build/hacer_version.py panel
 
+      - name: Captura de prueba (verifica que las interfaces se ven y arrancan)
+        shell: pwsh
+        run: |
+          $env:MB_SHOT = "shot_creador.png"; python crear_usb.py --autotest
+          $env:MB_SHOT = "shot_panel.png";   python panel_control.py --autotest
+          if (!(Test-Path shot_creador.png) -or !(Test-Path shot_panel.png)) { Write-Host "::warning::No se generó alguna captura" }
+
+      - name: Subir capturas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas
+          path: shot_*.png
+          if-no-files-found: warn
+
       - name: Compilar Creador de USB
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --windowed --uac-admin `
             --name MainbitCreadorUSB --icon icono_creador.ico --version-file ver_creador.txt `
-            --collect-all webview --collect-all pythonnet --collect-all clr_loader --hidden-import clr `
-            --add-data "web;web" crear_usb.py
+            --add-data "assets;assets" crear_usb.py
 
       - name: Compilar Panel de control
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --windowed `
             --name PanelControlOverty --icon icono_panel.ico --version-file ver_panel.txt `
-            --collect-all webview --collect-all pythonnet --collect-all clr_loader --hidden-import clr `
-            --collect-all cryptography --add-data "web;web" panel_control.py
+            --collect-all cryptography --add-data "assets;assets" panel_control.py
 
-      - name: WebView2Loader.dll (firmada por Microsoft) para ambos
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -UseBasicParsing -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2592.51" -OutFile wv2.zip
-          Expand-Archive wv2.zip -DestinationPath wv2pkg -Force
-          $ld = Get-ChildItem -Recurse wv2pkg -Filter WebView2Loader.dll | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
-          Copy-Item $ld.FullName dist\MainbitCreadorUSB\_internal\WebView2Loader.dll -Force
-          Copy-Item $ld.FullName dist\PanelControlOverty\_internal\WebView2Loader.dll -Force
-
-      - name: Lanzadores .bat
+      - name: Lanzador .bat (el Creador pide permiso de administrador)
         shell: pwsh
         run: |
           $lineas = @(
