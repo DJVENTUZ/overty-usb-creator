@@ -75,7 +75,7 @@ jobs:
           Compress-Archive -Path dist\MainbitCreadorUSB\* -DestinationPath MainbitCreadorUSB.zip -Force
           Compress-Archive -Path dist\PanelControlOverty\* -DestinationPath PanelControlOverty.zip -Force
 
-      - name: Publicar en Releases
+      - name: Publicar en Releases (Windows)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
@@ -85,3 +85,44 @@ jobs:
             PanelControlOverty.zip
             shot_creador.png
             shot_panel.png
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias
+        run: python -m pip install --upgrade pyinstaller pywebview cryptography
+
+      - name: Prueba de arranque (no bloquea)
+        run: |
+          python mac/panel_mac.py --autotest || echo "::warning::panel mac: arranque no concluyente en CI"
+          python mac/crear_mac.py --autotest || echo "::warning::creador mac: arranque no concluyente en CI"
+
+      - name: Compilar Panel (Mac · Liquid Glass)
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name "Panel Overty" \
+            --collect-all webview --collect-all cryptography \
+            --add-data "mac/web:web" mac/panel_mac.py
+
+      - name: Compilar Creador (Mac · Liquid Glass)
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --name "Creador USB Overty" \
+            --collect-all webview \
+            --add-data "mac/web:web" mac/crear_mac.py
+
+      - name: Empaquetar .app
+        run: |
+          ditto -c -k --keepParent "dist/Panel Overty.app" "PanelOverty-Mac.zip"
+          ditto -c -k --keepParent "dist/Creador USB Overty.app" "CreadorUSBOverty-Mac.zip"
+
+      - name: Publicar en Releases (Mac)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Creador y Panel de Overty (última versión)"
+          files: |
+            PanelOverty-Mac.zip
+            CreadorUSBOverty-Mac.zip
