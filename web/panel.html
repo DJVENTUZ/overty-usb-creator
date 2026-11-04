@@ -7,7 +7,7 @@ html,body{height:100%}
 body{background:linear-gradient(165deg,#163150,#0c1a2c);color:var(--ink);-webkit-font-smoothing:antialiased;user-select:none;overflow:auto}
 .wrap{min-height:100vh;padding:26px 30px;display:flex;flex-direction:column;gap:18px;max-width:720px;margin:0 auto}
 .top{display:flex;align-items:center;gap:12px}
-.logo{font-size:22px;font-weight:800;display:flex;align-items:center}.logo .m{color:#fff}.logo .b{color:var(--blue2)}.logo .ring{width:11px;height:11px;border:3px solid var(--blue2);border-radius:50%;margin:7px 0 0 3px}
+.brand{background:#fff;border-radius:11px;padding:7px 12px;display:inline-flex;align-items:center}.brand img{height:24px;display:block}
 .top h1{font-size:14px;font-weight:600}.top small{display:block;font-size:12px;color:var(--ink2)}
 .top .firma{margin-left:auto;font-size:12px;color:var(--ink2)}.top .firma b{color:#fff}
 .card{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:18px;padding:22px 24px;display:flex;flex-direction:column;gap:14px}
@@ -44,7 +44,7 @@ details .g3{display:flex;flex-direction:column;gap:10px}
 .big-btn{display:flex;align-items:center;justify-content:center;gap:10px;padding:15px;font-size:15px}
 </style></head>
 <body><div class="wrap">
- <div class="top"><div class="logo"><span class="m">Main</span><span class="b">bit</span><i class="ring"></i></div>
+ <div class="top"><div class="brand"><img src="logo.png" alt="Mainbit"></div>
    <div><h1>Panel de control · Overty</h1><small>Solo para ti · activa, desactiva y cambia el ISO</small></div>
    <div class="firma" id="firma"></div></div>
  <div id="vista"></div>
@@ -67,13 +67,13 @@ function render(){
 
 function login(){
   el.innerHTML=`<div class="card">
-    <h2>Entrar</h2>
-    <div class="hint">Escribe tu PIN. ${S.hay_token?'Tu token de GitHub ya está guardado cifrado en este equipo.':'La primera vez, pega también tu <b>token de GitHub</b> (con permiso <b>repo</b>); se guardará cifrado con tu PIN.'}</div>
-    <div><label>PIN</label><input id="pin" type="password" autocomplete="off"></div>
+    <h2>${S.hay_token?'Entrar':'Configura tu PIN'}</h2>
+    <div class="hint">${S.hay_token?'Escribe tu PIN para entrar.':'Primera vez: <b>inventa un PIN</b> (el que quieras recordar) y pega tu <b>token de GitHub</b> con permiso <b>repo</b>. Se guarda cifrado con tu PIN; después solo te pediré el PIN.'}</div>
+    <div><label>${S.hay_token?'PIN':'PIN nuevo (invéntalo)'}</label><input id="pin" type="password" autocomplete="off"></div>
     ${S.hay_token?'':'<div><label>Token de GitHub (ghp_…)</label><input id="tok" type="password" autocomplete="off" placeholder="ghp_xxxxxxxx"></div>'}
     <div class="row"><div class="msg err" id="msg">${esc(S.msg||'')}</div>
-      <button class="btn" style="margin-left:auto" onclick="entrar()">Entrar</button></div>
-    ${S.hay_token?'<div class="hint">¿Cambiar de token? Borra el archivo cfg.bin en %APPDATA%\\\\OvertyPanel.</div>':''}
+      <button class="btn" style="margin-left:auto" onclick="entrar()">${S.hay_token?'Entrar':'Guardar y entrar'}</button></div>
+    ${S.hay_token?'<div class="hint">¿Olvidaste el PIN o cambias de token? Borra el archivo cfg.bin en %APPDATA%\\\\OvertyPanel y vuelve a configurarlo.</div>':''}
   </div>`;
 }
 
@@ -122,8 +122,11 @@ function guardar(){const c=S.control;document.getElementById('gsave').disabled=t
 function subir(){api().elegir_y_subir_iso().then(()=>{});}
 function usarUrl(){api().usar_url(val('iso_nombre'),val('iso_url'),val('iso_sha')).then(()=>{});}
 
-async function latir(){try{const n=await api().snapshot();S=n;render()}catch(e){}}
-window.addEventListener('pywebviewready',()=>{latir();setInterval(()=>{if(!document.activeElement||['BODY','DIV'].includes(document.activeElement.tagName))latir()},1200)});
-setTimeout(()=>{if(window.pywebview)latir()},300);
+let _last='',_arr=false;
+async function latir(){const ae=document.activeElement;if(ae&&['INPUT','TEXTAREA'].includes(ae.tagName))return;
+  try{const n=await api().snapshot();const j=JSON.stringify(n);if(j===_last)return;_last=j;S=n;render()}catch(e){}}
+function arranca(){if(_arr)return;_arr=true;latir();setInterval(latir,1000)}
+window.addEventListener('pywebviewready',arranca);
+setTimeout(()=>{if(window.pywebview)arranca()},400);
 </script>
 </body></html>

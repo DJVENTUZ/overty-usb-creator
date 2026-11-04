@@ -316,6 +316,13 @@ class API:
         return True
 
 
+def _datos_webview():
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    d = os.path.join(base, "OvertyCreator", "webview")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def main():
     import webview
     api = API()
@@ -324,7 +331,8 @@ def main():
                               js_api=api, width=940, height=680, min_size=(820, 600),
                               background_color="#eef3f9")
     api.ventana = w
-    webview.start(api.arrancar, gui="edgechromium")
+    # storage_path = carpeta propia y con permiso de escritura para WebView2 (evita que se quede "no responde")
+    webview.start(api.arrancar, gui="edgechromium", private_mode=False, storage_path=_datos_webview())
 
 
 if __name__ == "__main__":

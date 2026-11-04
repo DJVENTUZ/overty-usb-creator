@@ -263,6 +263,13 @@ class API:
             return False
 
 
+def _datos_webview():
+    base = os.environ.get("LOCALAPPDATA") or APPDATA
+    d = os.path.join(base, "OvertyPanel", "webview")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def main():
     import webview
     api = API()
@@ -270,7 +277,7 @@ def main():
                                         url=os.path.join(dir_web(), "panel.html"),
                                         js_api=api, width=760, height=760, min_size=(680, 640),
                                         background_color="#12263d")
-    webview.start(gui="edgechromium")
+    webview.start(gui="edgechromium", private_mode=False, storage_path=_datos_webview())
 
 
 if __name__ == "__main__":
