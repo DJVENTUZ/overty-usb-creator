@@ -3,9 +3,10 @@
   "mensaje": "El Creador de USB de Overty está desactivado temporalmente. Contacta a Gabriel HernArro.",
   "firma": "Gabriel HernArro",
   "iso": {
-    "nombre": "Overty Disk (USB fix)",
-    "url": "",
-    "sha256": ""
+    "nombre": "overty-disk-1.3.0-dev.22-rc2-r3-1027_MBT-usbfix.iso",
+    "url": "https://github.com/DJVENTUZ/overty-usb-creator/releases/download/iso/overty.iso",
+    "sha256": "b9977115ed7aacc414810ca10a762c72a5a62c1473ae0a23f6df097b62336f76",
+    "subido": "2026-11-04 20:43"
   },
-  "actualizado": "2026-11-04 12:58"
+  "actualizado": "2026-11-04 20:43"
 }
