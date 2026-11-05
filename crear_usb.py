@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import mb_config as CFG
+import mb_update
 
 IS_WIN = os.name == "nt"
 NOWIN = 0x08000000 if IS_WIN else 0
@@ -228,6 +229,50 @@ def crear_usb(disco_n, iso, log, progreso):
     return None
 
 
+def crear_ventoy(disco_n, iso, log, progreso):
+    """Instala Ventoy en la USB (queda reutilizable y multi-ISO) y copia el ISO.
+    Ventoy arranca el ISO montándolo, así que el usbfix (sin live-media) arranca bien."""
+    vexe = recurso(os.path.join("ventoy", "Ventoy2Disk.exe"))
+    if not os.path.isfile(vexe):
+        raise RuntimeError("Este programa no incluye Ventoy. Usa el modo Imagen.")
+    log("Instalando Ventoy en la USB…")
+    progreso(-1, "Instalando Ventoy…")
+    try:
+        r = subprocess.run([vexe, "VTOYCLI", "/I", f"/PhyDrive:{disco_n}"],
+                           input=b"y\r\ny\r\n", cwd=os.path.dirname(vexe),
+                           capture_output=True, timeout=600, creationflags=NOWIN)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Ventoy tardó demasiado. Reintenta o usa el modo Imagen.")
+    if r.returncode != 0:
+        raise RuntimeError("Ventoy no pudo instalarse (¿la USB está en uso? ¿protegida contra escritura?).")
+    # buscar la partición de datos de Ventoy (etiqueta 'Ventoy')
+    letra = None
+    for _ in range(25):
+        time.sleep(1)
+        rc, out, _ = ps(f"(Get-Partition -DiskNumber {disco_n} | Get-Volume | "
+                        f"Where-Object {{$_.FileSystemLabel -eq 'Ventoy'}}).DriveLetter")
+        letra = (out or "").strip()[:1]
+        if letra:
+            break
+    if not letra:
+        raise RuntimeError("Ventoy se instaló pero no apareció su partición. Reconecta la USB y copia el ISO a mano.")
+    log(f"Copiando Overty a la USB ({letra}:)…")
+    destino = os.path.join(letra + ":\\", "overty.iso")
+    total = os.path.getsize(iso)
+    hecho = 0
+    with open(iso, "rb") as s, open(destino, "wb") as d:
+        while True:
+            b = s.read(4 * 1024 * 1024)
+            if not b:
+                break
+            d.write(b)
+            hecho += len(b)
+            if total:
+                progreso(hecho / total * 100.0, f"Copiando  {hecho//(1024*1024)} / {total//(1024*1024)} MB")
+    ps(f"Write-VolumeCache -DriveLetter {letra}")
+    return letra
+
+
 # ------------------------------------------------------------------ interfaz Tkinter
 class App:
     def __init__(self, root, autotest=False):
@@ -236,6 +281,7 @@ class App:
         self.fase = "cargando"
         self.control = None
         self.sel = tk.IntVar(value=-1)
+        self.modo = tk.StringVar(value="imagen")
         self.lista_usb = []
         self.ocupado = False
 
@@ -262,7 +308,16 @@ class App:
             self._render()
             root.after(1500, self._captura)
         else:
+            threading.Thread(target=self._auto_update, daemon=True).start()
             threading.Thread(target=self._comprobar, daemon=True).start()
+
+    def _auto_update(self):
+        try:
+            v = mb_update.hay_version_nueva()
+            if v:
+                mb_update.actualizar("creador", "MainbitCreadorUSB.exe")  # descarga, reemplaza y relanza
+        except Exception:
+            pass
 
     # ---- estructura fija
     def _encabezado(self):
@@ -388,8 +443,19 @@ class App:
             tk.Label(cont, text="Conecta una memoria USB (8 GB o más) y aparecerá aquí.",
                      bg=CARD, fg=INK2, font=("Segoe UI", 10)).pack(pady=24)
 
+        # selector de modo de grabado
+        modo_f = tk.Frame(pad, bg=CARD)
+        modo_f.pack(fill="x", pady=(10, 0))
+        tk.Label(modo_f, text="MODO", bg=CARD, fg=INK2, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Radiobutton(modo_f, variable=self.modo, value="imagen", bg=CARD, activebackground=CARD, fg=INK,
+                       selectcolor="#e7eef7", font=("Segoe UI", 10), anchor="w", takefocus=0,
+                       text="  Imagen — USB dedicada a Overty. Siempre arranca. (recomendado)").pack(fill="x")
+        tk.Radiobutton(modo_f, variable=self.modo, value="ventoy", bg=CARD, activebackground=CARD, fg=INK,
+                       selectcolor="#e7eef7", font=("Segoe UI", 10), anchor="w", takefocus=0,
+                       text="  Ventoy — USB reutilizable, puede llevar varios ISOs. También arranca.").pack(fill="x")
+
         barra = tk.Frame(pad, bg=CARD)
-        barra.pack(fill="x", pady=(6, 0))
+        barra.pack(fill="x", pady=(10, 0))
         tk.Label(barra, text="⚠ La USB que elijas se borra por completo.", bg=CARD, fg=INK2,
                  font=("Segoe UI", 9)).pack(side="left")
         puede = bool(iso.get("url")) and self.lista_usb
@@ -401,9 +467,10 @@ class App:
         if self.ocupado or self.sel.get() < 0:
             return
         disco = self.sel.get()
+        modo = self.modo.get()
         self.ocupado = True
         self._pantalla_progreso()
-        threading.Thread(target=self._tarea, args=(disco,), daemon=True).start()
+        threading.Thread(target=self._tarea, args=(disco, modo), daemon=True).start()
 
     def _pantalla_progreso(self):
         self._limpiar()
@@ -444,13 +511,18 @@ class App:
             self.lbl_etapa.configure(text=etapa)
         self.ui(_)
 
-    def _tarea(self, disco):
+    def _tarea(self, disco, modo="imagen"):
         try:
             iso_info = (self.control or {}).get("iso") or {}
             iso = descargar_iso(iso_info["url"], iso_info.get("sha256", ""), self._log, self._prog)
-            crear_usb(int(disco), iso, self._log, self._prog)
-            self._prog(100, "Listo")
-            self._log("LISTO: la USB está lista. Ya puedes sacarla.")
+            if modo == "ventoy":
+                crear_ventoy(int(disco), iso, self._log, self._prog)
+                self._prog(100, "Listo")
+                self._log("LISTO: USB con Ventoy lista. Arranca desde ella y elige Overty en el menú.")
+            else:
+                crear_usb(int(disco), iso, self._log, self._prog)
+                self._prog(100, "Listo")
+                self._log("LISTO: la USB está lista. Ya puedes sacarla.")
             self.ui(self._exito)
         except Exception as e:
             self._log("ERROR: " + str(e))

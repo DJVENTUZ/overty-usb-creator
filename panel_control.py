@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import mb_config as CFG
+import mb_update
 
 APPDATA = os.environ.get("APPDATA") or os.path.expanduser("~")
 CFG_DIR = os.path.join(APPDATA, "OvertyPanel")
@@ -192,6 +193,14 @@ class App:
             root.after(1500, self._captura)
         else:
             self._login()
+            threading.Thread(target=self._auto_update, daemon=True).start()
+
+    def _auto_update(self):
+        try:
+            if mb_update.hay_version_nueva():
+                mb_update.actualizar("panel", "PanelControlOverty.exe")
+        except Exception:
+            pass
 
     def _encabezado(self):
         top = tk.Frame(self.root, bg=NAVY)
