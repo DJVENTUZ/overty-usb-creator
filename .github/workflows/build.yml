@@ -56,15 +56,13 @@ jobs:
             --name PanelControlOverty --icon icono_panel.ico --version-file ver_panel.txt `
             --collect-all cryptography --add-data "assets;assets" panel_control.py
 
-      - name: Lanzador .bat (el Creador pide permiso de administrador)
+      - name: Lanzador .bat (el .exe ya pide permiso de administrador solo)
         shell: pwsh
         run: |
           $lineas = @(
             '@echo off',
             'title Creador de USB Overty',
-            'net session >nul 2>&1',
-            'if errorlevel 1 ( powershell -NoProfile -Command "Start-Process -FilePath ''%~f0'' -Verb RunAs" & exit /b )',
-            'start "" "%~dp0MainbitCreadorUSB\MainbitCreadorUSB.exe"'
+            'start "" "%~dp0MainbitCreadorUSB.exe"'
           )
           Set-Content -Path "dist\MainbitCreadorUSB\CREAR_USB_OVERTY.bat" -Value $lineas -Encoding ascii
 
