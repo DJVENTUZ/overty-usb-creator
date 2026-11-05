@@ -146,75 +146,86 @@ def _seguro_tam(p):
 
 
 def crear_usb(disco_n, iso, log, progreso):
+    """Graba el ISO en la USB en MODO IMAGEN (escritura cruda al disco físico),
+    igual que 'dd' / Rufus-DD. Es el único método que arranca de forma fiable este
+    tipo de imagen live. Necesita permisos de administrador."""
+    import ctypes
+    from ctypes import wintypes
+
+    # 1) limpiar el disco: quita particiones y libera bloqueos de Windows
     log("Preparando la USB…")
     progreso(-1, "Preparando la USB…")
-    crear = "create partition primary size=32000" if _tam_disco(disco_n) > 32 * 1024**3 else "create partition primary"
-    script = "\r\n".join([f"select disk {disco_n}", "clean", "convert mbr", crear,
-                          "format fs=fat32 quick label=OVERTY", "active", "assign"])
+    script = "\r\n".join([f"select disk {disco_n}", "clean", "rescan"])
     dp = os.path.join(tempfile.gettempdir(), "overty_dp.txt")
     open(dp, "w", encoding="ascii").write(script)
-    rc, out, err = ps(f"diskpart /s '{dp}'", timeout=300)
+    rc, out, err = ps(f"diskpart /s '{dp}'", timeout=180)
     try:
         os.remove(dp)
     except OSError:
         pass
     if rc != 0:
         raise RuntimeError("No se pudo preparar la USB (diskpart).")
-    dst = _letra_disco(disco_n)
-    if not dst:
-        raise RuntimeError("La USB se formateó pero Windows no le dio letra. Reconéctala y reintenta.")
-    log(f"USB lista como {dst}:")
+    time.sleep(2)
 
-    log("Abriendo el ISO…")
-    rc, out, _ = ps(f"(Mount-DiskImage -ImagePath '{iso}' -PassThru | Get-Volume).DriveLetter", timeout=120)
-    src = (out or "").strip()[:1]
-    for _ in range(15):
-        if src:
-            break
-        time.sleep(1)
-        rc, out, _ = ps(f"(Get-DiskImage -ImagePath '{iso}' | Get-Volume).DriveLetter")
-        src = (out or "").strip()[:1]
-    if not src:
-        raise RuntimeError("Windows no pudo abrir el ISO.")
-
+    # 2) escritura cruda del ISO al disco físico \\.\PhysicalDrive<N>
+    total = os.path.getsize(iso)
+    log(f"Grabando Overty en la USB (modo imagen, {total//(1024*1024)} MB)…")
+    GENERIC_RW = 0x80000000 | 0x40000000
+    SHARE_RW = 0x00000001 | 0x00000002
+    OPEN_EXISTING = 3
+    INVALID = ctypes.c_void_p(-1).value
+    k = ctypes.windll.kernel32
+    k.CreateFileW.restype = ctypes.c_void_p
+    k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                              wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    path = f"\\\\.\\PhysicalDrive{disco_n}"
+    h = k.CreateFileW(path, GENERIC_RW, SHARE_RW, None, OPEN_EXISTING, 0, None)
+    if h == INVALID or h is None:
+        raise RuntimeError("No pude abrir la USB para escritura. Reconéctala y reintenta como administrador.")
     try:
-        archivos, total = [], 0
-        for raiz, _, fs in os.walk(src + ":\\"):
-            for nombre in fs:
-                p = os.path.join(raiz, nombre)
-                total += _seguro_tam(p)
-                archivos.append(p)
-        if [a for a in archivos if _seguro_tam(a) >= 4 * 1024**3]:
-            raise RuntimeError("El ISO trae un archivo de más de 4 GB; no cabe en FAT32. Avísale a Gabriel.")
-        log(f"Copiando Overty ({len(archivos)} archivos, {total//(1024*1024)} MB)…")
-        copiado = 0
-        pref = src + ":\\"
-        for a in archivos:
-            d = os.path.join(dst + ":\\", a[len(pref):])
-            os.makedirs(os.path.dirname(d), exist_ok=True)
-            with open(a, "rb") as fi, open(d, "wb") as fo:
-                while True:
-                    b = fi.read(1024 * 1024)
-                    if not b:
-                        break
-                    fo.write(b)
-                    copiado += len(b)
-                    if total:
-                        progreso(copiado / total * 100.0, f"Copiando  {copiado//(1024*1024)} / {total//(1024*1024)} MB")
-        log("Verificando…")
-        progreso(-1, "Verificando…")
-        n_dst = sum(len(fs) for _, _, fs in os.walk(dst + ":\\"))
-        if n_dst < len(archivos):
-            raise RuntimeError(f"La USB no quedó completa ({n_dst}/{len(archivos)} archivos). Usa otra USB.")
-        if not os.path.isfile(os.path.join(dst + ":\\", "EFI", "BOOT", "BOOTX64.EFI")):
-            log("Aviso: no encontré EFI\\BOOT\\BOOTX64.EFI; podría no arrancar en UEFI.")
-        firma = (f"USB creada con la herramienta de {CFG.FIRMA}\r\nISO: {os.path.basename(iso)}\r\n"
-                 f"Fecha: {time.strftime('%Y-%m-%d %H:%M')}\r\nEquipo: {os.environ.get('COMPUTERNAME','')}\r\n")
-        open(os.path.join(dst + ":\\", "CREADA-POR.txt"), "w", encoding="utf-8").write(firma)
-        ps(f"Write-VolumeCache -DriveLetter {dst}")
+        # bloquea y desmonta cualquier volumen remanente (ignora errores si no hay)
+        for ctl in (0x00090018, 0x00090020):  # FSCTL_LOCK_VOLUME, FSCTL_DISMOUNT_VOLUME
+            br = wintypes.DWORD(0)
+            k.DeviceIoControl(ctypes.c_void_p(h), ctl, None, 0, None, 0, ctypes.byref(br), None)
+        escrito = 0
+        CH = 4 * 1024 * 1024
+        with open(iso, "rb") as src:
+            while True:
+                b = src.read(CH)
+                if not b:
+                    break
+                if len(b) % 512:                       # alinear a sector
+                    b += b"\x00" * (512 - len(b) % 512)
+                wr = wintypes.DWORD(0)
+                ok = k.WriteFile(ctypes.c_void_p(h), b, len(b), ctypes.byref(wr), None)
+                if not ok or wr.value != len(b):
+                    raise RuntimeError(f"Fallo al escribir en la USB (error {k.GetLastError()}).")
+                escrito += len(b)
+                if total:
+                    progreso(min(99.0, escrito / total * 100.0), f"Grabando  {escrito//(1024*1024)} / {total//(1024*1024)} MB")
+        k.FlushFileBuffers(ctypes.c_void_p(h))
     finally:
-        ps(f"Dismount-DiskImage -ImagePath '{iso}'")
-    return dst
+        k.CloseHandle(ctypes.c_void_p(h))
+
+    # 3) verificar: releer el primer MB y compararlo con el ISO
+    log("Verificando…")
+    progreso(-1, "Verificando…")
+    try:
+        h2 = k.CreateFileW(path, 0x80000000, SHARE_RW, None, OPEN_EXISTING, 0, None)
+        if h2 and h2 != INVALID:
+            buf = ctypes.create_string_buffer(1024 * 1024)
+            rd = wintypes.DWORD(0)
+            k.ReadFile(ctypes.c_void_p(h2), buf, len(buf), ctypes.byref(rd), None)
+            k.CloseHandle(ctypes.c_void_p(h2))
+            with open(iso, "rb") as src:
+                esperado = src.read(1024 * 1024)
+            if buf.raw[:len(esperado)] != esperado:
+                raise RuntimeError("La verificación no coincidió. Reintenta o usa otra USB.")
+    except OSError:
+        pass
+
+    log(f"USB grabada correctamente ({total//(1024*1024)} MB).")
+    return None
 
 
 # ------------------------------------------------------------------ interfaz Tkinter
@@ -437,9 +448,9 @@ class App:
         try:
             iso_info = (self.control or {}).get("iso") or {}
             iso = descargar_iso(iso_info["url"], iso_info.get("sha256", ""), self._log, self._prog)
-            dst = crear_usb(int(disco), iso, self._log, self._prog)
+            crear_usb(int(disco), iso, self._log, self._prog)
             self._prog(100, "Listo")
-            self._log(f"LISTO: la USB en {dst}: está lista. Ya puedes sacarla.")
+            self._log("LISTO: la USB está lista. Ya puedes sacarla.")
             self.ui(self._exito)
         except Exception as e:
             self._log("ERROR: " + str(e))
