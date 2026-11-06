@@ -8,7 +8,7 @@ el control remoto y deja la USB lista para arrancar en UEFI.
 import os, sys, json, time, threading, subprocess, tempfile, hashlib
 import urllib.request
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 import mb_config as CFG
 import mb_update
@@ -330,6 +330,18 @@ def crear_ventoy(disco_n, iso, log, progreso):
     return letra
 
 
+def es_overty(iso_info):
+    """True si el ISO publicado en control.json es Overty Disk (por nombre o URL).
+    Overty necesita su propia partición ext4 'OVERTY' para persistir; con Ventoy
+    no hay espacio para crearla, así que para Overty se prioriza el modo Imagen."""
+    txt = ((iso_info or {}).get("nombre", "") + " " + (iso_info or {}).get("url", "")).lower()
+    return "overty" in txt
+
+
+def hay_ventoy():
+    return os.path.isfile(os.path.join(recurso("ventoy"), "Ventoy2Disk.exe"))
+
+
 # ------------------------------------------------------------------ interfaz Tkinter
 class App:
     def __init__(self, root, autotest=False):
@@ -500,16 +512,28 @@ class App:
             tk.Label(cont, text="Conecta una memoria USB (8 GB o más) y aparecerá aquí.",
                      bg=CARD, fg=INK2, font=("Segoe UI", 10)).pack(pady=24)
 
-        # selector de modo de grabado
+        # selector de modo de grabado: con Overty se prioriza Imagen (Ventoy rompe su persistencia)
+        overty = es_overty(iso)
         modo_f = tk.Frame(pad, bg=CARD)
         modo_f.pack(fill="x", pady=(10, 0))
         tk.Label(modo_f, text="MODO", bg=CARD, fg=INK2, font=("Segoe UI", 9, "bold")).pack(anchor="w")
         tk.Radiobutton(modo_f, variable=self.modo, value="imagen", bg=CARD, activebackground=CARD, fg=INK,
-                       selectcolor="#e7eef7", font=("Segoe UI", 10), anchor="w", takefocus=0,
-                       text="  Imagen — USB dedicada a Overty. Siempre arranca. (recomendado)").pack(fill="x")
-        tk.Radiobutton(modo_f, variable=self.modo, value="ventoy", bg=CARD, activebackground=CARD, fg=INK,
-                       selectcolor="#e7eef7", font=("Segoe UI", 10), anchor="w", takefocus=0,
-                       text="  Ventoy — USB reutilizable, puede llevar varios ISOs. También arranca.").pack(fill="x")
+                       selectcolor="#e7eef7", font=("Segoe UI", 10, "bold"), anchor="w", takefocus=0,
+                       text=("  Imagen — recomendado para Overty" if overty
+                             else "  Imagen — USB dedicada. Siempre arranca. (recomendado)")).pack(fill="x")
+        tk.Label(modo_f, bg=CARD, fg=INK2, font=("Segoe UI", 9), anchor="w", padx=26,
+                 text=("Siempre arranca y Overty puede crear su partición para guardar reportes y ajustes."
+                       if overty else "La USB queda dedicada a este ISO.")).pack(fill="x")
+        if hay_ventoy() or self.autotest:
+            tk.Label(modo_f, text="OTRA OPCIÓN", bg=CARD, fg=INK2, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(8, 0))
+            tk.Radiobutton(modo_f, variable=self.modo, value="ventoy", bg=CARD, activebackground=CARD, fg=INK2,
+                           selectcolor="#e7eef7", font=("Segoe UI", 9), anchor="w", takefocus=0,
+                           text="  Ventoy — USB reutilizable para llevar varios ISOs").pack(fill="x")
+            if overty:
+                tk.Label(modo_f, bg=CARD, fg=WARN, font=("Segoe UI", 9), anchor="w", padx=26,
+                         text="⚠ Con Overty arranca, pero NO guarda nada (sin persistencia). Úsalo solo para otros ISOs.").pack(fill="x")
+        else:
+            self.modo.set("imagen")
 
         barra = tk.Frame(pad, bg=CARD)
         barra.pack(fill="x", pady=(10, 0))
@@ -525,6 +549,19 @@ class App:
             return
         disco = self.sel.get()
         modo = self.modo.get()
+        iso = (self.control or {}).get("iso") or {}
+        if modo == "ventoy" and es_overty(iso):
+            seguir = messagebox.askyesno(
+                "Ventoy no es recomendado para Overty",
+                "Con Ventoy, Overty arranca pero NO puede crear su partición OVERTY:\n"
+                "no se guardarán reportes, ajustes ni registros entre reinicios.\n\n"
+                "Para Overty se recomienda el modo Imagen.\n\n"
+                "¿Quieres continuar con Ventoy de todos modos?",
+                icon="warning", default="no", parent=self.root)
+            if not seguir:
+                self.modo.set("imagen")
+                self._render()
+                return
         self.ocupado = True
         self._pantalla_progreso()
         threading.Thread(target=self._tarea, args=(disco, modo), daemon=True).start()
@@ -576,6 +613,9 @@ class App:
                 crear_ventoy(int(disco), iso, self._log, self._prog)
                 self._prog(100, "Listo")
                 self._log("LISTO: USB con Ventoy lista. Arranca desde ella y elige Overty en el menú.")
+                if es_overty(iso_info):
+                    self._log("AVISO: con Ventoy, Overty corre solo en RAM (sin persistencia). "
+                              "Para guardar reportes, crea la USB en modo Imagen.")
             else:
                 crear_usb(int(disco), iso, self._log, self._prog)
                 self._prog(100, "Listo")
@@ -598,6 +638,7 @@ class App:
 
     def _otra(self):
         self.sel.set(-1)
+        self.modo.set("imagen")   # cada USB nueva vuelve al modo recomendado
         self.refrescar_usb()
         self.fase = "listo"
         self._render()

@@ -9,9 +9,17 @@ QUÉ HACE
 CÓMO SE USA
   1. Conecta una memoria USB de 8 GB o más.  (SE BORRA TODO lo que tenga)
   2. Doble clic en  CREAR_USB_OVERTY.bat  y acepta el permiso de administrador.
-  3. Elige la memoria en la lista y pulsa "Crear USB".
+  3. Elige la memoria en la lista, deja el modo en "Imagen" y pulsa "Crear USB".
   4. Espera a que diga LISTO. Ya puedes sacarla.
   5. Arranca la PC desde la USB (tecla F12 en Lenovo) en modo UEFI.
+
+QUÉ MODO USAR
+  - IMAGEN (recomendado para Overty): la USB queda dedicada a Overty, siempre
+    arranca y Overty crea su partición OVERTY para guardar reportes y ajustes.
+  - VENTOY (opción secundaria): sirve para llevar varios ISOs en una misma USB.
+    Con Overty arranca, pero NO guarda nada entre reinicios (corre solo en RAM)
+    y verás [FAILED] en overty-prepare-persistence / overty-mount-usb.
+    Úsalo solo para otros ISOs. La app te pedirá confirmación si lo eliges.
 
 NECESITA INTERNET
   La primera descarga del ISO necesita conexión. Después queda guardado en el equipo.
