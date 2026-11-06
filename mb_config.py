@@ -3,7 +3,7 @@
 
 FIRMA = "Gabriel HernArro"
 PRODUCTO = "Creador de USB · Overty"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 # Repositorio de control (SEPARADO de mainbit-asistente / toolkit).
 # Aquí vive control.json, que decide si la app funciona y qué ISO baja.
