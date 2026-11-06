@@ -230,24 +230,81 @@ def crear_usb(disco_n, iso, log, progreso):
 
 
 def crear_ventoy(disco_n, iso, log, progreso):
-    """Instala Ventoy en la USB (queda reutilizable y multi-ISO) y copia el ISO.
-    Ventoy arranca el ISO montándolo, así que el usbfix (sin live-media) arranca bien."""
-    vexe = recurso(os.path.join("ventoy", "Ventoy2Disk.exe"))
-    if not os.path.isfile(vexe):
+    """Instala Ventoy en la USB con el modo CLI oficial (Ventoy 1.0.86+) y copia el ISO.
+    Ventoy escribe su resultado en cli_done.txt (0=ok) y el avance en cli_percent.txt,
+    por eso se corre desde una carpeta temporal con permiso de escritura."""
+    import shutil
+    vsrc = recurso("ventoy")
+    if not os.path.isfile(os.path.join(vsrc, "Ventoy2Disk.exe")):
         raise RuntimeError("Este programa no incluye Ventoy. Usa el modo Imagen.")
-    log("Instalando Ventoy en la USB…")
-    progreso(-1, "Instalando Ventoy…")
+    tmp = tempfile.mkdtemp(prefix="overty_vtoy_")
+    vdir = os.path.join(tmp, "ventoy")
     try:
-        r = subprocess.run([vexe, "VTOYCLI", "/I", f"/PhyDrive:{disco_n}"],
-                           input=b"y\r\ny\r\n", cwd=os.path.dirname(vexe),
-                           capture_output=True, timeout=600, creationflags=NOWIN)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Ventoy tardó demasiado. Reintenta o usa el modo Imagen.")
-    if r.returncode != 0:
-        raise RuntimeError("Ventoy no pudo instalarse (¿la USB está en uso? ¿protegida contra escritura?).")
-    # buscar la partición de datos de Ventoy (etiqueta 'Ventoy')
+        shutil.copytree(vsrc, vdir)
+        vexe = os.path.join(vdir, "Ventoy2Disk.exe")
+        done_f = os.path.join(vdir, "cli_done.txt")
+        pct_f = os.path.join(vdir, "cli_percent.txt")
+        log_f = os.path.join(vdir, "cli_log.txt")
+        for x in (done_f, pct_f, log_f):
+            try:
+                os.remove(x)
+            except OSError:
+                pass
+
+        log("Instalando Ventoy en la USB…")
+        progreso(0, "Instalando Ventoy…")
+        p = subprocess.Popen([vexe, "VTOYCLI", "/I", f"/PhyDrive:{disco_n}", "/NOUSBCheck"],
+                             cwd=vdir, creationflags=NOWIN,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        res = ""
+        inicio = time.time()
+        while True:
+            if os.path.isfile(done_f):
+                time.sleep(0.4)
+                try:
+                    res = open(done_f, encoding="utf-8", errors="replace").read().strip()[:1]
+                except OSError:
+                    res = ""
+                break
+            try:
+                pv = open(pct_f, encoding="utf-8", errors="replace").read().strip()
+                if pv:
+                    progreso(min(60.0, float(pv) * 0.6), "Instalando Ventoy…")
+            except (OSError, ValueError):
+                pass
+            if p.poll() is not None and not os.path.isfile(done_f):
+                time.sleep(1.2)
+                res = ("0" if os.path.isfile(done_f) and open(done_f).read().strip().startswith("0") else "?")
+                break
+            if time.time() - inicio > 600:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                raise RuntimeError("Ventoy tardó demasiado. Reintenta o usa el modo Imagen.")
+            time.sleep(0.5)
+        try:
+            p.wait(timeout=8)
+        except Exception:
+            pass
+        if res != "0":
+            detalle = ""
+            try:
+                lineas = open(log_f, encoding="utf-8", errors="replace").read().strip().splitlines()
+                if lineas:
+                    detalle = " (" + lineas[-1][:110] + ")"
+            except Exception:
+                pass
+            raise RuntimeError("Ventoy no pudo instalarse en la USB." + detalle)
+    finally:
+        try:
+            shutil.rmtree(tmp, ignore_errors=True)
+        except Exception:
+            pass
+
+    # buscar la partición de datos de Ventoy (etiqueta 'Ventoy') y copiar el ISO
     letra = None
-    for _ in range(25):
+    for _ in range(30):
         time.sleep(1)
         rc, out, _ = ps(f"(Get-Partition -DiskNumber {disco_n} | Get-Volume | "
                         f"Where-Object {{$_.FileSystemLabel -eq 'Ventoy'}}).DriveLetter")
@@ -260,15 +317,15 @@ def crear_ventoy(disco_n, iso, log, progreso):
     destino = os.path.join(letra + ":\\", "overty.iso")
     total = os.path.getsize(iso)
     hecho = 0
-    with open(iso, "rb") as s, open(destino, "wb") as d:
+    with open(iso, "rb") as s2, open(destino, "wb") as d:
         while True:
-            b = s.read(4 * 1024 * 1024)
+            b = s2.read(4 * 1024 * 1024)
             if not b:
                 break
             d.write(b)
             hecho += len(b)
             if total:
-                progreso(hecho / total * 100.0, f"Copiando  {hecho//(1024*1024)} / {total//(1024*1024)} MB")
+                progreso(60 + hecho / total * 40.0, f"Copiando  {hecho//(1024*1024)} / {total//(1024*1024)} MB")
     ps(f"Write-VolumeCache -DriveLetter {letra}")
     return letra
 
